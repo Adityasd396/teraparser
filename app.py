@@ -14,9 +14,12 @@ from tempfile import NamedTemporaryFile as _tb_tempfile
 from urllib.parse import urljoin, urlparse, urlunparse, unquote, parse_qs as _tb_query
 
 from cryptography.fernet import Fernet, InvalidToken
+from dotenv import load_dotenv
 from flask import Flask, jsonify, request
 from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 import requests
+
+load_dotenv(_TBPath(__file__).with_name('.env'), override=False)
 
 _ASSETS = _TBPath(__file__).with_name('assets')
 TERABOX_PAGE = (_ASSETS/'index.html').read_text(encoding='utf-8')
@@ -69,7 +72,7 @@ def configure_local_runtime(app):
         public_origin = 'https://' + hostname + (f':{parsed.port}' if parsed.port not in (None,443) else '')
         username = os.environ.get('RIPPER_SERVER_USER','')
         password = os.environ.get('RIPPER_SERVER_PASSWORD','')
-        if not username or ':' in username or not password:
+        if not username or ':' in username or not password or password=='replace-with-a-strong-password':
             raise ValueError('Set RIPPER_SERVER_USER and RIPPER_SERVER_PASSWORD to enable remote access.')
     app.config['RIPPER_PUBLIC_ORIGIN'] = public_origin
 
@@ -95,7 +98,7 @@ def configure_local_runtime(app):
             if public_request:
                 expected_origin = public_origin
         elif not local:
-            return jsonify(error='Use the local app address or configure RIPPER_PUBLIC_ORIGIN for server access.'),403
+            return jsonify(error='Set RIPPER_PUBLIC_ORIGIN to this site’s HTTPS address in .env next to app.py, then reload the web service.'),403
         if request.method in ('POST','PUT','PATCH','DELETE'):
             origin=request.headers.get('Origin')
             if (origin and origin!=expected_origin) or request.headers.get('Sec-Fetch-Site')=='cross-site':
@@ -373,11 +376,42 @@ def _tb_session_path():
     return folder/'terabox-session.bin'
 
 
+_TB_KEY_LOCK = threading.Lock()
+
+
 def _tb_cipher():
+    configured = os.environ.get('TERABOX_SESSION_KEY','').strip()
+    if configured and configured != 'replace-with-a-generated-fernet-key':
+        try:
+            return Fernet(configured.encode('ascii'))
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise ValueError('TERABOX_SESSION_KEY is invalid. Use a generated Fernet key or unset it for a fresh deployment.') from exc
+
+    session = _tb_session_path()
+    key_file = session.with_name('terabox-session.key')
+    with _TB_KEY_LOCK:
+        try:
+            key = key_file.read_bytes().strip()
+        except FileNotFoundError:
+            if session.exists():
+                raise ValueError('Existing cookies need their original TERABOX_SESSION_KEY or terabox-session.key.') from None
+            key_file.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+            try:
+                descriptor = os.open(key_file,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+            except FileExistsError:
+                key = key_file.read_bytes().strip()
+            else:
+                key = Fernet.generate_key()
+                try:
+                    with os.fdopen(descriptor,'wb') as output:
+                        output.write(key)
+                except OSError:
+                    key_file.unlink(missing_ok=True)
+                    raise
     try:
-        return Fernet(os.environ.get('TERABOX_SESSION_KEY','').encode('ascii'))
-    except (ValueError, UnicodeEncodeError) as exc:
-        raise ValueError('Set TERABOX_SESSION_KEY to a generated Fernet key.') from exc
+        return Fernet(key)
+    except ValueError as exc:
+        raise ValueError('The saved terabox-session.key is invalid. Restore the original key before opening existing cookies.') from exc
 
 
 def _tb_protect(data, decrypt=False):
@@ -1333,7 +1367,10 @@ def terabox_media(session_id,entry_id):
 if __name__ == '__main__':
     from waitress import serve
 
-    _tb_cipher()
+    try:
+        _tb_cipher()
+    except (OSError,ValueError) as exc:
+        raise SystemExit(str(exc)) from None
     bind = os.environ.get('RIPPER_BIND_HOST','127.0.0.1')
     port = int(os.environ.get('PORT') or '5050')
     if bind not in _LOCAL_HOSTS and not app.config['RIPPER_PUBLIC_ORIGIN']:
