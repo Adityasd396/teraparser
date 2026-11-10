@@ -1,0 +1,348 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TeraBox Link Parser</title>
+<style>
+  :root{color-scheme:light;--ink:#172638;--muted:#516274;--line:#dce5eb;--surface:#fff;--primary:#075b59;--soft:#edf7f6}
+  *{box-sizing:border-box}
+  body{margin:0;background:#f5f8fb;color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  main{max-width:920px;margin:auto;padding:32px 20px 56px}
+  a{color:var(--primary)}
+  .back{font-size:14px;font-weight:650;text-decoration:none}
+  .hero{margin:28px 0 22px}
+  .eyebrow{color:var(--primary);font-size:12px;font-weight:750;letter-spacing:.08em;text-transform:uppercase}
+  h1,h2,p{margin:0}
+  h1{font-size:clamp(30px,5vw,43px);line-height:1.15;letter-spacing:-.04em;margin:6px 0 10px}
+  h2{font-size:17px;letter-spacing:-.01em}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;margin-top:16px;box-shadow:0 4px 14px #183d5510}
+  label{display:block;font-weight:650;margin:0 0 6px}
+  input,button,.button{font:inherit;border-radius:8px;min-height:42px}
+  input{width:100%;min-width:0;border:1px solid #bccbd5;background:white;color:var(--ink);padding:9px 12px}
+  button,.button{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:8px 13px;border:1px solid #c7d5dd;background:white;color:var(--ink);font-weight:650;cursor:pointer;text-decoration:none}
+  button:hover,.button:hover{background:#f0f5f8}
+  .primary{background:var(--primary);border-color:var(--primary);color:white}
+  .primary:hover{background:#074946}
+  .secondary{background:var(--soft);border-color:#c6dfdd;color:#074d4b}
+  button:disabled{opacity:.55;cursor:wait}
+  :is(a,button,input,summary):focus-visible{outline:3px solid #68a5db;outline-offset:3px}
+  .muted,.help{color:var(--muted);font-size:13px}
+  .form-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:9px}
+  .help{margin-top:10px}
+  .settings{border-top:1px solid var(--line);margin-top:17px;padding-top:13px}
+  .settings summary{cursor:pointer;color:var(--primary);font-weight:650}
+  .settings label{margin-top:14px}
+  .settings button{margin-top:8px}
+  .results-header{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+  #status{color:var(--muted);white-space:pre-wrap}
+  .source{margin-top:12px;padding:15px;border:1px solid var(--line);border-radius:12px;overflow-wrap:anywhere}
+  .source-main{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px}
+  .source-actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+  .source-details{margin-top:10px;color:var(--muted);font-size:13px}
+  .source-details summary{cursor:pointer;width:max-content;max-width:100%}
+  .source-details p{margin:8px 0}
+  #playerPanel{margin-top:14px}
+  #videoPlayer{display:block;width:100%;max-height:65vh;background:#101820;border-radius:10px}
+  #playerStatus{margin-top:6px}
+  #fullVideoShare{display:inline-block;margin-top:10px}
+  [hidden]{display:none!important}
+  @media(max-width:550px){main{padding:22px 14px 38px}.hero{margin-top:22px}.card{padding:15px}.form-row{grid-template-columns:1fr}.source-actions{width:100%}.results-header{align-items:flex-start}}
+</style></head>
+<body><main>
+<header class="hero">
+  <p class="eyebrow">Media workspace</p>
+  <h1>TeraBox video resolver</h1>
+  <p>Paste a share link to find, play, or download the video with your saved session.</p>
+</header>
+<section class="card" aria-label="Resolve a TeraBox share">
+  <form id="resolveForm" autocomplete="off">
+    <label for="share">TeraBox share URL</label>
+    <div class="form-row">
+      <input id="share" type="url" required placeholder="https://terabox.app/s/…">
+      <button id="submit" class="primary" type="submit">Resolve full video</button>
+    </div>
+    <p class="help">If TeraBox requires it for full access, resolving may save a copy to your account.</p>
+  </form>
+  <details id="cookieSettings" class="settings">
+    <summary>Saved session settings</summary>
+    <label for="userAgent">User-Agent from the browser that can play the share (optional)</label>
+    <input id="userAgent" type="text" maxlength="512" spellcheck="false" placeholder="Copy the User-Agent request header">
+    <button id="saveUserAgent" type="button">Update User-Agent for saved cookies</button>
+    <label for="cookieFile">TeraBox cookie export (JSON, cookies.txt, or TSV)</label>
+    <input id="cookieFile" type="file" accept=".json,.txt,.tsv">
+    <p class="help">Cookies are encrypted on the server and reused for future shares.</p>
+  </details>
+</section>
+<section class="card" aria-labelledby="resultsHeading">
+  <div class="results-header">
+    <h2 id="resultsHeading">Video results</h2>
+    <button id="copy" type="button" hidden>Copy all links</button>
+  </div>
+  <p id="status" role="status">Paste a share link to get started.</p>
+  <div id="playerPanel" hidden>
+    <video id="videoPlayer" controls playsinline></video>
+    <p id="playerStatus" class="muted"></p>
+  </div>
+  <a id="fullVideoShare" target="_blank" rel="noopener noreferrer" hidden>Open original share for full-video options</a>
+  <div id="results"></div>
+</section>
+</main><script>
+const $ = id => document.getElementById(id);
+function normalizeShareField() {
+    const field = $('share');
+    const value = field.value.trim();
+    field.value = value.replace(/^(?:https?:\/\/)?(?:www\.)?terabox\.com(?=\/|[?#]|$)/i, 'https://terabox.app');
+    return field.value;
+}
+
+$('share').addEventListener('paste', () => setTimeout(normalizeShareField, 0));
+$('share').addEventListener('change', normalizeShareField);
+
+let links = [];
+let player = null;
+let playerLoad = null;
+let playbackRevision = 0;
+
+function resetPlayer() {
+    playbackRevision++;
+    if (player) player.destroy();
+    player = null;
+    const video = $('videoPlayer');
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    $('playerPanel').hidden = true;
+}
+
+function loadHlsPlayer() {
+    if (!playerLoad) {
+        playerLoad = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = '/terabox/player/hls.js';
+            script.onload = resolve;
+            script.onerror = () => {
+                playerLoad = null;
+                script.remove();
+                reject(Error('Could not load the local HLS player.'));
+            };
+            document.head.append(script);
+        });
+    }
+    return playerLoad;
+}
+
+async function playStream(url) {
+    resetPlayer();
+    const revision = playbackRevision;
+    const video = $('videoPlayer');
+    const status = $('playerStatus');
+    $('playerPanel').hidden = false;
+    status.textContent = 'Loading captured video…';
+    const start = () => video.play().catch(error => {
+        if (revision === playbackRevision && error.name === 'NotAllowedError') {
+            status.textContent = 'Press Play in the video controls.';
+        }
+    });
+    try {
+        await loadHlsPlayer();
+        if (revision !== playbackRevision) return;
+        if (window.Hls?.isSupported()) {
+            const instance = new window.Hls();
+            player = instance;
+            instance.on(window.Hls.Events.ERROR, (_event, data) => {
+                if (data.fatal && player === instance) {
+                    const code = data.response?.code;
+                    status.textContent = code
+                        ? `The media relay returned HTTP ${code}. Resolve the share again if the link expired.`
+                        : 'Playback stopped. ' + data.details;
+                }
+            });
+            instance.on(window.Hls.Events.MANIFEST_PARSED, () => {
+                if (player === instance) start();
+            });
+            instance.loadSource(url);
+            instance.attachMedia(video);
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = url;
+            start();
+        } else {
+            status.textContent = 'This browser cannot play HLS. Open the playlist in an HLS-capable player.';
+        }
+    } catch (error) {
+        if (revision === playbackRevision) status.textContent = error.message;
+    }
+}
+
+$('videoPlayer').onplaying = () => { $('playerStatus').textContent = 'Playing the captured stream.'; };
+
+function formatDuration(seconds) {
+    const rounded = Math.round(seconds);
+    return Math.floor(rounded / 60) + ':' + String(rounded % 60).padStart(2, '0');
+}
+
+function startFileDownload(url, message) {
+    const frame = document.createElement('iframe');
+    frame.hidden = true;
+    frame.title = 'TeraBox video download';
+    frame.addEventListener('load', () => {
+        const error = frame.contentDocument?.body?.textContent?.trim();
+        if (error) $('status').textContent = error.slice(0, 300);
+    });
+    frame.src = url;
+    $('results').append(frame);
+    $('status').textContent = message;
+}
+
+async function resolveVideo() {
+    $('submit').disabled = true;
+    $('cookieFile').disabled = true;
+    $('copy').hidden = true;
+    resetPlayer();
+    $('fullVideoShare').hidden = true;
+    $('results').replaceChildren();
+    $('status').textContent = 'Capturing media with your saved TeraBox cookies…';
+    links = [];
+    try {
+        const response = await fetch('/terabox/resolve', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({url: normalizeShareField(), save_preview_to_account: true})
+        });
+        const result = await response.json();
+        if (!response.ok) {
+            if (response.status === 422 || [401, 403].includes(result.upstream_status)) $('cookieSettings').open = true;
+            throw Error(result.error || 'Resolution failed.');
+        }
+        let originalDownload = null;
+        for (const source of result.sources || []) {
+            if (!/^https?:\/\//.test(source.url || '')) continue;
+            links.push(source.url);
+            const card = document.createElement('div');
+            card.className = 'source';
+            const row = document.createElement('div');
+            row.className = 'source-main';
+            const actions = document.createElement('div');
+            actions.className = 'source-actions';
+            const title = document.createElement('strong');
+            const duration = Number.isFinite(source.duration_seconds) ? ` · ${formatDuration(source.duration_seconds)}` : '';
+            const label = {hls_manifest: 'Video stream', subtitle_track: 'Subtitles', dash_manifest: 'DASH stream'}[source.kind];
+            title.textContent = source.kind === 'video_download'
+                ? source.name
+                : (label || 'Media link') + (source.quality ? ' · ' + source.quality : '') + duration;
+            const text = document.createElement('p');
+            text.textContent = source.url;
+            const details = document.createElement('details');
+            details.className = 'source-details';
+            const summary = document.createElement('summary');
+            summary.textContent = 'Source URL';
+            details.append(summary, text);
+            const open = document.createElement('a');
+            open.className = 'button';
+            open.href = source.replay_url || source.url;
+            open.target = '_blank';
+            open.rel = 'noopener noreferrer';
+            open.textContent = source.replay_url ? 'Open with captured session' : 'Open raw link';
+            if (source.kind === 'video_download' && source.replay_url) {
+                open.textContent = 'Download video';
+                open.classList.add('secondary');
+                originalDownload ??= source.replay_url;
+            }
+            if (source.kind === 'hls_manifest' && source.replay_url) {
+                const play = document.createElement('button');
+                play.type = 'button';
+                play.className = 'primary';
+                play.textContent = 'Play video';
+                play.onclick = () => playStream(source.replay_url);
+                open.textContent = 'Open playlist';
+                actions.append(play);
+                if (source.download_url) {
+                    const download = document.createElement('a');
+                    download.className = 'button secondary';
+                    download.textContent = 'Download MP4';
+                    download.href = source.download_url;
+                    download.onclick = event => {
+                        event.preventDefault();
+                        startFileDownload(source.download_url, 'Preparing MP4. Your browser will start the download when it’s ready.');
+                    };
+                    actions.append(download);
+                }
+                details.append(open);
+            } else {
+                actions.append(open);
+            }
+            const copy = document.createElement('button');
+            copy.textContent = 'Copy link';
+            copy.onclick = () => copyText(source.url);
+            actions.append(copy);
+            row.append(title, actions);
+            card.append(row, details);
+            $('results').append(card);
+        }
+        $('status').textContent = result.message + ' ' + links.length + ' link(s).';
+        $('copy').hidden = links.length === 0;
+        if (result.cookie_host) $('cookieSettings').open = true;
+        if (result.full_video_share) {
+            $('fullVideoShare').href = result.full_video_share;
+            $('fullVideoShare').textContent = result.cookie_host ? 'Open original share to refresh cookies' : 'Open original share for full-video options';
+            $('fullVideoShare').hidden = false;
+        }
+        if (originalDownload) {
+            startFileDownload(originalDownload, result.message + ' Starting the file download…');
+        }
+    } catch (error) {
+        $('status').textContent = error.message;
+    } finally {
+        $('submit').disabled = false;
+        $('cookieFile').disabled = false;
+    }
+}
+$('resolveForm').onsubmit = event => {
+    event.preventDefault();
+    resolveVideo();
+};
+$('saveUserAgent').onclick = async () => {
+    $('saveUserAgent').disabled = true;
+    try {
+        const response = await fetch('/terabox/session/user-agent', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({user_agent: $('userAgent').value.trim()})
+        });
+        const result = await response.json();
+        $('status').textContent = response.ok ? result.message : result.error;
+    } catch (error) {
+        $('status').textContent = error.message;
+    } finally {
+        $('saveUserAgent').disabled = false;
+    }
+};
+$('cookieFile').onchange = async event => {
+    const file = event.target.files[0];
+    if (!file) return;
+    event.target.value = '';
+    const headers = {'Content-Type': 'text/plain'};
+    const userAgent = $('userAgent').value.trim();
+    if (userAgent) headers['X-TeraBox-User-Agent'] = userAgent;
+    $('cookieFile').disabled = true;
+    $('submit').disabled = true;
+    try {
+        const response = await fetch('/terabox/session/import', {
+            method: 'POST', headers, body: file
+        });
+        const result = await response.json();
+        if (!response.ok) throw Error(result.error || 'Cookie upload failed.');
+        $('status').textContent = result.message;
+        $('cookieSettings').open = false;
+    } catch (error) {
+        $('status').textContent = error.message;
+    } finally {
+        $('cookieFile').disabled = false;
+        $('submit').disabled = false;
+    }
+};
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        $('status').textContent = 'Copied.';
+    } catch {
+        $('status').textContent = 'Clipboard unavailable.';
+    }
+}
+$('copy').onclick = () => copyText(links.map(url => url + ',').join('\n'));
+</script></body></html>
